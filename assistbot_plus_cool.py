@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-AssistBot+ — Cooler colors, visible ANSI fallback, and a sleeker prompt.
+AssistBot+ — improved version with platform-friendly search opener.
 
-Single-file assistant shell. Optional dependency: `rich` for prettier output.
-If `rich` is not installed, the script falls back to ANSI color codes with
-clearly visible defaults.
-
-Save as `assistbot_plus_cool.py` and run with Python 3.8+.
+Features:
+- Robust `search` command that detects YouTube intent and opens the correct URL.
+- Tries multiple URL openers (am start, termux-open-url, xdg-open, open, webbrowser).
+- Readline-friendly prompt (non-printing ANSI wrapped) to avoid wrapping/cursor bugs.
+- SQLite-backed simple commands and brain.
+- Plugin loading, mappings, and basic builtins preserved.
 """
 
 import os
@@ -24,7 +25,7 @@ import readline
 import glob
 import getpass
 import atexit
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 
@@ -39,32 +40,35 @@ try:
 except Exception:
     USE_RICH = False
 
-# Define logical styles we'll use across the program
 STYLE_KEYS = [
     "header", "cyan", "green", "gold", "red", "magenta", "bold", "muted", "warning"
 ]
 
-# ANSI codes for fallback (visible, high-contrast)
 ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
-    "header": "\033[95m",   # bright magenta
-    "cyan": "\033[96m",     # bright cyan
-    "green": "\033[92m",    # bright green
-    "gold": "\033[93m",     # bright yellow (gold)
-    "red": "\033[91m",      # bright red
-    "magenta": "\033[35m",  # magenta (less bright fallback)
-    "muted": "\033[90m",    # dark gray
-    "warning": "\033[33m",  # yellow-ish
+    "header": "\033[95m",
+    "cyan": "\033[96m",
+    "green": "\033[92m",
+    "gold": "\033[93m",
+    "red": "\033[91m",
+    "magenta": "\033[35m",
+    "muted": "\033[90m",
+    "warning": "\033[33m",
 }
 
+def _np(seq: str) -> str:
+    """
+    Wrap non-printing ANSI sequence for readline-aware prompts.
+    readline needs non-printing sequences wrapped in \001...\002 so it
+    can correctly compute cursor position (prevents wrapping issues).
+    """
+    if not seq:
+        return seq
+    return f"\001{seq}\002"
+
 def p(text: str, style: str = None, end: str = "\n"):
-    """
-    Central print function.
-    - If rich is available, prints with rich styles.
-    - Otherwise emits ANSI sequences using the friendly ANSI mapping above.
-    Acceptable style values: one of STYLE_KEYS or a space-separated combo like "bold green".
-    """
+    """Central print function with optional ANSI/rich styling."""
     if USE_RICH:
         if style:
             console.print(text, style=style, end=end)
@@ -72,25 +76,19 @@ def p(text: str, style: str = None, end: str = "\n"):
             console.print(text, end=end)
     else:
         if style:
-            # support "bold green" combos
             parts = style.split()
-            codes = ""
-            for part in parts:
-                codes += ANSI.get(part, "")
+            codes = "".join(ANSI.get(part, "") for part in parts)
             print(f"{codes}{text}{ANSI['reset']}", end=end)
         else:
             print(text, end=end)
 
 def pretty_table(columns, rows, title=None):
-    """
-    Nicely render tables using rich if available, otherwise a simple ASCII table.
-    """
+    """Render a simple table (rich if available)."""
     if USE_RICH:
         t = Table(title=title) if title else Table()
         for c in columns:
             t.add_column(str(c))
         for r in rows:
-            # pad row to column count
             rpad = [str(r[i]) if i < len(r) else "" for i in range(len(columns))]
             t.add_row(*rpad)
         console.print(t)
@@ -101,7 +99,6 @@ def pretty_table(columns, rows, title=None):
         if not rows:
             p(" | ".join(columns), style="bold")
             return
-        # compute widths
         colwidths = []
         for i, c in enumerate(columns):
             maxw = len(str(c))
@@ -113,23 +110,22 @@ def pretty_table(columns, rows, title=None):
         p(header, style="bold")
         p("-" * len(header), style="muted")
         for r in rows:
-            line = " | ".join(str(r[i]).ljust(colwidths[i]) if i < len(r) else "".ljust(colwidths[i])
-                              for i in range(len(columns)))
+            line = " | ".join(
+                str(r[i]).ljust(colwidths[i]) if i < len(r) else "".ljust(colwidths[i])
+                for i in range(len(columns))
+            )
             p(line)
 
 # ---------------- AssistBotPlus core ----------------
 class AssistBotPlus:
     DB_FILE = "assistbot_plus.db"
     PLUGINS_DIR = "plugins"
-    PROMPT_TEMPLATE_SHORT = "{header}{user}{reset}{at}{time}{reset}{sep}{path}{reset}\n{arrow} "
-    # blocked substrings to prevent catastrophic commands
     BLOCKED_PATTERNS = [
         "rm -rf", "rm -rf /", "mkfs", ":(){:|:&};:", "dd if=",
         ">/dev", ">: /dev", "sudo rm", "chmod 000", "halt", "reboot", "poweroff"
     ]
 
     def __init__(self):
-        # identity
         try:
             self.user = getpass.getuser()
         except Exception:
@@ -142,20 +138,14 @@ class AssistBotPlus:
         self._load_mappings()
         self._load_knowledge()
 
-        # plugins
         self.plugins = {}
         self._load_plugins()
 
-        # readline + history
         self._setup_readline()
-
-        # threadpool for background tasks if needed
         self.executor = ThreadPoolExecutor(max_workers=2)
-
-        # show a cool banner
         self._print_banner()
 
-    # ---------------- DB ----------------
+    # DB helpers
     def _setup_db(self):
         self.cursor.execute(
             "CREATE TABLE IF NOT EXISTS commands (key TEXT PRIMARY KEY, template TEXT, meta TEXT)"
@@ -199,11 +189,11 @@ class AssistBotPlus:
         self.knowledge.pop(key, None)
 
     def add_history(self, entry):
-        ts = datetime.now(UTC).isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         self.cursor.execute("INSERT INTO history VALUES (?, ?)", (ts, entry))
         self.db.commit()
 
-    # ---------------- Plugins ----------------
+    # Plugins
     def _load_plugins(self):
         os.makedirs(self.PLUGINS_DIR, exist_ok=True)
         for path in glob.glob(os.path.join(self.PLUGINS_DIR, "*.py")):
@@ -217,7 +207,7 @@ class AssistBotPlus:
             except Exception:
                 p(f"[PLUGIN] Failed to load {name}: {traceback.format_exc()}", style="red")
 
-    # ---------------- Readline / Completion ----------------
+    # Readline / Completion
     def _setup_readline(self):
         histfile = os.path.expanduser("~/.assistbot_plus_history")
         try:
@@ -230,8 +220,11 @@ class AssistBotPlus:
         readline.set_completer(self._completer)
         try:
             readline.parse_and_bind("tab: complete")
+            try:
+                readline.parse_and_bind('set horizontal-scroll-mode Off')
+            except Exception:
+                pass
         except Exception:
-            # some platforms may not support parse_and_bind
             pass
 
     def _completer(self, text, state):
@@ -260,18 +253,12 @@ class AssistBotPlus:
         except IndexError:
             return None
 
-    # ---------------- Helpers ----------------
+    # Helpers
     def prompt_short(self):
-        """
-        Returns a short colorful prompt string for input().
-        Uses ANSI when rich is not available. When rich is available, we will use console.input.
-        """
         user = self.user
         time = datetime.now().strftime("%H:%M")
         path = self.cwd.replace(os.path.expanduser("~"), "~")
-        # compose color pieces for ANSI fallback
         if USE_RICH:
-            # rich handles styling at input time via console.input which accepts markup in some contexts.
             header = f"[bold magenta]ASSIST[/bold magenta] "
             user_part = f"[bold cyan]{user}[/bold cyan]"
             at = " @ "
@@ -280,12 +267,12 @@ class AssistBotPlus:
             arrow = "[bold green]λ[/bold green]"
             return f"{header}{user_part}{at}{time_part}{sep}\n{arrow} "
         else:
-            header = f"{ANSI['header']}{ANSI['bold']}ASSIST{ANSI['reset']} "
-            user_part = f"{ANSI['cyan']}{ANSI['bold']}{user}{ANSI['reset']}"
+            header = f"{_np(ANSI['header'] + ANSI['bold'])}ASSIST{_np(ANSI['reset'])} "
+            user_part = f"{_np(ANSI['cyan'] + ANSI['bold'])}{user}{_np(ANSI['reset'])}"
             at = " @ "
-            time_part = f"{ANSI['green']}{ANSI['bold']}{time}{ANSI['reset']}"
-            sep = f" {ANSI['gold']}{path}{ANSI['reset']}"
-            arrow = f"{ANSI['green']}{ANSI['bold']}λ{ANSI['reset']}"
+            time_part = f"{_np(ANSI['green'] + ANSI['bold'])}{time}{_np(ANSI['reset'])}"
+            sep = f" {_np(ANSI['gold'])}{path}{_np(ANSI['reset'])}"
+            arrow = f"{_np(ANSI['green'] + ANSI['bold'])}λ{_np(ANSI['reset'])}"
             return f"{header}{user_part}{at}{time_part}{sep}\n{arrow} "
 
     @staticmethod
@@ -303,7 +290,7 @@ class AssistBotPlus:
         matches = difflib.get_close_matches(word, pool, n=1, cutoff=0.6)
         return matches[0] if matches else None
 
-    # ---------------- Expand & Execute ----------------
+    # Expand & Execute
     def _expand_template(self, template, args):
         try:
             tokens = shlex.split(template)
@@ -364,14 +351,75 @@ class AssistBotPlus:
             p(f"[SHELL] Failed: {e}", style="red")
             traceback.print_exc()
 
-    # ---------------- Builtins ----------------
+    # URL opener helper (tries many fallbacks without Termux:API requirement)
+    def _open_url(self, url: str) -> bool:
+        """
+        Try multiple ways to open a URL. Returns True if one method appears to have been invoked.
+        Order:
+          1) Android 'am start' (available on most Android devices including Termux)
+          2) termux-open-url (if present)
+          3) xdg-open (Linux desktop)
+          4) open (macOS)
+          5) webbrowser.open()
+        If none works, return False (caller should print the URL).
+        """
+        # 1) Try Android am start (Intent)
+        if shutil.which("am"):
+            try:
+                # Use the Android intent to view the URL
+                rc = subprocess.run(["am", "start", "-a", "android.intent.action.VIEW", "-d", url], check=False)
+                # rc.returncode == 0 is a good sign
+                if rc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # 2) termux-open-url (optional, won't be required)
+        if shutil.which("termux-open-url"):
+            try:
+                rc = subprocess.run(["termux-open-url", url], check=False)
+                if rc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # 3) xdg-open (desktop linux)
+        if shutil.which("xdg-open"):
+            try:
+                rc = subprocess.run(["xdg-open", url], check=False)
+                if rc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # 4) macOS open
+        if shutil.which("open"):
+            try:
+                rc = subprocess.run(["open", url], check=False)
+                if rc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # 5) Python's webbrowser as last resort (may return False on Termux)
+        try:
+            opened = webbrowser.open(url, new=2)
+            if opened:
+                return True
+        except Exception:
+            pass
+
+        # nothing worked
+        return False
+
+    # Builtins
     def cmd_help(self):
         help_text = """AssistBot+ — Cool mode enabled.
 
 Core commands:
   help                 Show this help
   sys                  Show disk and load info
-  search <query>       Open browser search
+  search <query>       Open browser search (google or youtube). Accepts flags -y/--youtube or -g/--google.
   .map key = template  Map a key to a command template (use $1, $2, $*, $@)
   .teach key = resp1|resp2  Teach bot responses (separate with |)
   maps                 List mapped commands
@@ -387,9 +435,12 @@ Core commands:
   exit / quit          Quit
 
 Examples:
+  search mrbeast youtube
+  search yt: \"mrbeast challenge\"
+  search -y mrbeast
+  search -g linux networking
   .map greet = echo Hello $1
   .teach joke = Why did the chicken cross? | To get to the other side
-  map greet Harsh
 """
         p(help_text, style="muted")
 
@@ -402,16 +453,101 @@ Examples:
         except Exception as e:
             p(f"[SYS] Info failed: {e}", style="red")
 
-    def cmd_search(self, query):
-        if not query:
-            p("Usage: search <query>", style="warning")
+    def cmd_search(self, raw_query: str):
+        """
+        Robust search implementation:
+          - supports flags -y/--youtube and -g/--google
+          - supports prefixes 'yt:' or 'youtube:' and 'yt:term' inline
+          - detects phrases like 'on youtube', trailing 'youtube' or 'yt'
+          - tries to open the URL using _open_url() (which uses am/xdg-open/termux-open-url/webbrowser)
+          - prints the final URL as fallback
+        """
+        if not raw_query or not raw_query.strip():
+            p("Usage: search <query>  (use -y for YouTube or -g for Google)", style="warning")
             return
-        url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}"
-        p(f"[WEB] Searching for: {query}", style="green")
+
         try:
-            webbrowser.open_new_tab(url)
+            tokens = shlex.split(raw_query)
         except Exception:
-            p("[WEB] Could not open browser.", style="red")
+            tokens = raw_query.split()
+
+        tokens_l = [t.lower() for t in tokens]
+
+        force_yt = False
+        force_google = False
+        is_youtube = False
+
+        # First pass: parse flags and prefixes; build cleaned tokens
+        cleaned = []
+        for tok, tl in zip(tokens, tokens_l):
+            if tl in ('-y', '--youtube'):
+                force_yt = True
+                continue
+            if tl in ('-g', '--google'):
+                force_google = True
+                continue
+            if tl.endswith(':') and tl[:-1] in ('yt', 'youtube'):
+                is_youtube = True
+                continue
+            if ':' in tok and tok.split(':', 1)[0].lower() in ('yt', 'youtube'):
+                is_youtube = True
+                parts = tok.split(':', 1)
+                if parts[1]:
+                    cleaned.append(parts[1])
+                continue
+            cleaned.append(tok)
+
+        # Respect explicit flags
+        if force_yt:
+            is_youtube = True
+        if force_google:
+            is_youtube = False
+
+        # Second pass: safely remove tokens like 'on youtube', 'of youtube', standalone 'youtube'/'yt'
+        new_cleaned = []
+        i = 0
+        while i < len(cleaned):
+            tok = cleaned[i]
+            tl = tok.lower()
+            # on youtube / of youtube
+            if tl in ('on', 'of') and i + 1 < len(cleaned) and cleaned[i+1].lower() == 'youtube':
+                is_youtube = True
+                i += 2
+                continue
+            if tl == 'youtube' or tl == 'yt':
+                is_youtube = True
+                i += 1
+                continue
+            new_cleaned.append(tok)
+            i += 1
+
+        query = ' '.join(new_cleaned).strip()
+
+        # If user asked only youtube (no extra terms)
+        if is_youtube and not query:
+            url = 'https://www.youtube.com'
+            p('[WEB] Opening YouTube home', style='green')
+            p(url, style='muted')
+            opened = self._open_url(url)
+            if not opened:
+                p('[WEB] Could not open automatically. URL printed above.', style='warning')
+            return
+
+        # Build final URL
+        if is_youtube:
+            enc = urllib.parse.quote_plus(query if query else raw_query)
+            url = f'https://www.youtube.com/results?search_query={enc}'
+            p(f"[WEB] YouTube search: {query if query else raw_query}", style='green')
+        else:
+            enc = urllib.parse.quote_plus(query if query else raw_query)
+            url = f'https://www.google.com/search?q={enc}'
+            p(f"[WEB] Google search: {query if query else raw_query}", style='green')
+
+        # Attempt to open
+        p(url, style='muted')
+        opened = self._open_url(url)
+        if not opened:
+            p('[WEB] No opener succeeded — copy/paste the URL above into a browser.', style='warning')
 
     def cmd_maps(self):
         if not self.mappings:
@@ -428,7 +564,6 @@ Examples:
         pretty_table(["key", "responses"], rows, title="Brain")
 
     def _print_banner(self):
-        # A compact colored banner that looks "real" and cool
         banner_lines = [
             r"   ___    ____  ____  _____ ____  _   _ ",
             r"  / _ \  / ___|| __ )| ____|  _ \| \ | |",
@@ -443,14 +578,13 @@ Examples:
             p("\n".join(banner_lines), style="header")
             p(">>> AssistBot+ — Cool Mode (type 'help')", style="cyan")
 
-    # ---------------- Main loop ----------------
+    # Main loop
     def run(self):
         p("Starting AssistBot+ — ready.", style="magenta")
         while True:
             try:
                 prompt_str = self.prompt_short()
                 if USE_RICH:
-                    # console.input supports simple prompt strings (rich styles are applied by markup)
                     try:
                         raw = console.input(prompt_str)
                     except Exception:
@@ -463,7 +597,6 @@ Examples:
                 if not line:
                     continue
 
-                # save history (best-effort)
                 try:
                     self.add_history(line)
                 except Exception:
@@ -508,7 +641,7 @@ Examples:
                 cmd = parts[0].lower()
                 args = parts[1:]
 
-                # builtins
+                # builtins routing
                 if cmd in ("exit", "quit"):
                     p("Goodbye — stay curious.", style="magenta")
                     break
@@ -517,6 +650,7 @@ Examples:
                 if cmd == "sys":
                     self.cmd_sys(); continue
                 if cmd == "search":
+                    # pass raw substring so quotes/colons are preserved
                     self.cmd_search(" ".join(args)); continue
                 if cmd == "maps":
                     self.cmd_maps(); continue
@@ -567,7 +701,7 @@ Examples:
                     self.exec_shell(cmdstr)
                     continue
 
-                # map <key> shorthand runs mapping
+                # map shorthand
                 if cmd == "map" and args:
                     key = args[0]
                     mapping = self.mappings.get(key)
@@ -595,7 +729,7 @@ Examples:
                     p(reply, style="muted")
                     continue
 
-                # run system commands if available
+                # run system commands directly if available
                 if shutil.which(cmd):
                     try:
                         subprocess.run([cmd] + args)
