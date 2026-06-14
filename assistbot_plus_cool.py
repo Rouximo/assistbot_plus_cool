@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-AssistBot+ — improved version with platform-friendly search opener.
+AssistBot+ — Cyberpunk Dystopian Edition.
+Pure ANSI aesthetic, no external UI dependencies.
 
 Features:
-- Robust `search` command that detects YouTube intent and opens the correct URL.
-- Tries multiple URL openers (am start, termux-open-url, xdg-open, open, webbrowser).
-- Readline-friendly prompt (non-printing ANSI wrapped) to avoid wrapping/cursor bugs.
-- SQLite-backed simple commands and brain.
-- Plugin loading, mappings, and basic builtins preserved.
+- Neon cyan/red/green dystopian color scheme
+- ASCII box-drawing UI panels
+- Hacker-style boot animation
+- Readline-safe prompt wrapping
+- Safe Calculator Node
+- Persisted Graph Designer & Visualizer
+- Persistent Note Fragments
+- Background Asynchronous Cortical Reminders
+- Robust `search` command with platform-friendly URL opening
 """
+#test change 
 
 import os
 import sqlite3
@@ -25,98 +31,145 @@ import readline
 import glob
 import getpass
 import atexit
+import time
+import ast
+import operator
+import threading
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 
-# ---------------- Rich detection and unified printing ----------------
-USE_RICH = False
-try:
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    console = Console()
-    USE_RICH = True
-except Exception:
-    USE_RICH = False
-
-STYLE_KEYS = [
-    "header", "cyan", "green", "gold", "red", "magenta", "bold", "muted", "warning"
-]
-
+# =============== DYSTOPIAN ANSI COLOR PALETTE ===============
 ANSI = {
+    "sys": "\033[1;96m",    # Neon Cyan
+    "err": "\033[1;91m",    # Neon Red
+    "warn": "\033[1;93m",   # Yellow
+    "mut": "\033[90m",      # Dark Gray/Steel
+    "head": "\033[1;95m",   # Magenta
+    "succ": "\033[1;92m",   # Neon Green
     "reset": "\033[0m",
-    "bold": "\033[1m",
-    "header": "\033[95m",
-    "cyan": "\033[96m",
-    "green": "\033[92m",
-    "gold": "\033[93m",
-    "red": "\033[91m",
-    "magenta": "\033[35m",
-    "muted": "\033[90m",
-    "warning": "\033[33m",
 }
 
 def _np(seq: str) -> str:
     """
-    Wrap non-printing ANSI sequence for readline-aware prompts.
-    readline needs non-printing sequences wrapped in \001...\002 so it
-    can correctly compute cursor position (prevents wrapping issues).
+    Wrap non-printing ANSI sequence for readline safety.
+    readline needs non-printing sequences wrapped in \001...\002
+    to avoid cursor position miscalculation.
     """
     if not seq:
         return seq
     return f"\001{seq}\002"
 
-def p(text: str, style: str = None, end: str = "\n"):
-    """Central print function with optional ANSI/rich styling."""
-    if USE_RICH:
-        if style:
-            console.print(text, style=style, end=end)
-        else:
-            console.print(text, end=end)
-    else:
-        if style:
-            parts = style.split()
-            codes = "".join(ANSI.get(part, "") for part in parts)
-            print(f"{codes}{text}{ANSI['reset']}", end=end)
-        else:
-            print(text, end=end)
+def p(text: str, style: str = "mut", end: str = "\n"):
+    """
+    Dystopian print function with ANSI styling.
+    Automatically wraps text in requested color and resets.
+    """
+    code = ANSI.get(style, ANSI["mut"])
+    reset = ANSI["reset"]
+    print(f"{code}{text}{reset}", end=end)
 
-def pretty_table(columns, rows, title=None):
-    """Render a simple table (rich if available)."""
-    if USE_RICH:
-        t = Table(title=title) if title else Table()
-        for c in columns:
-            t.add_column(str(c))
-        for r in rows:
-            rpad = [str(r[i]) if i < len(r) else "" for i in range(len(columns))]
-            t.add_row(*rpad)
-        console.print(t)
-    else:
-        if title:
-            p(title, style="bold header")
-            p("-" * max(len(title), 20), style="muted")
-        if not rows:
-            p(" | ".join(columns), style="bold")
-            return
-        colwidths = []
-        for i, c in enumerate(columns):
-            maxw = len(str(c))
-            for r in rows:
-                if i < len(r):
-                    maxw = max(maxw, len(str(r[i])))
-            colwidths.append(maxw)
-        header = " | ".join(columns[i].ljust(colwidths[i]) for i in range(len(columns)))
-        p(header, style="bold")
-        p("-" * len(header), style="muted")
-        for r in rows:
-            line = " | ".join(
-                str(r[i]).ljust(colwidths[i]) if i < len(r) else "".ljust(colwidths[i])
-                for i in range(len(columns))
-            )
-            p(line)
+def animate_boot():
+    """
+    Hacker-style boot animation on startup.
+    Clears screen and simulates system initialization.
+    """
+    os.system("cls" if os.name == "nt" else "clear")
+    time.sleep(0.3)
+    
+    boot_steps = [
+        "INITIALIZING NEURAL LINK...",
+        "BYPASSING SECURITY PROTOCOLS...",
+        "LOADING CONSCIOUSNESS MATRIX...",
+        "SYNCHRONIZATION COMPLETE.",
+    ]
+    
+    for step in boot_steps:
+        p(step, style="sys")
+        time.sleep(0.5)
+    
+    time.sleep(0.3)
+    os.system("cls" if os.name == "nt" else "clear")
 
-# ---------------- AssistBotPlus core ----------------
+def draw_box(title: str, rows: list, col_widths: list) -> str:
+    """
+    Draw an ASCII box with neon borders.
+    Returns a complete bordered panel as a string.
+    """
+    if not rows and not col_widths:
+        return ""
+    
+    border_width = sum(col_widths) + len(col_widths) * 3 + 1
+    top = "┌" + "─" * (border_width - 2) + "┐"
+    
+    if title:
+        title_fmt = f" {title} "
+        title_padded = title_fmt.center(border_width - 2)
+        title_line = "│" + title_padded + "│"
+        separator = "├" + "─" * (border_width - 2) + "┤"
+        lines = [top, title_line, separator]
+    else:
+        lines = [top]
+    
+    for row in rows:
+        row_parts = []
+        for i, cell in enumerate(row):
+            if i < len(col_widths):
+                cell_str = str(cell).ljust(col_widths[i])
+            else:
+                cell_str = str(cell)
+            row_parts.append(cell_str)
+        row_line = "│ " + " │ ".join(row_parts) + " │"
+        lines.append(row_line)
+    
+    bottom = "└" + "─" * (border_width - 2) + "┘"
+    lines.append(bottom)
+    
+    return "\n".join(lines)
+
+def disk_meter(used: int, total: int, width: int = 20) -> str:
+    """
+    Create a simple disk usage meter using block characters.
+    """
+    if total == 0:
+        return "█" * width
+    
+    ratio = used / total
+    filled = int(width * ratio)
+    empty = width - filled
+    
+    blocks = ["▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    meter = "".join(blocks[min(6, (i * 7 // width))] for i in range(filled))
+    meter += "░" * empty
+    
+    return f"[{meter}] {int(ratio * 100)}%"
+
+# =============== SAFE CALCULATOR LOGIC ===============
+def safe_eval(expr):
+    """
+    Safely evaluate mathematical expressions using AST parsing
+    without risking shell injection vulnerabilities from basic eval().
+    """
+    bin_ops = {
+        ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+        ast.Div: operator.truediv, ast.Mod: operator.mod, ast.Pow: operator.pow
+    }
+    unary_ops = {
+        ast.UAdd: operator.pos, ast.USub: operator.neg
+    }
+    def _eval(node):
+        if isinstance(node, ast.Num): 
+            return node.n
+        elif isinstance(node, ast.BinOp): 
+            return bin_ops[type(node.op)](_eval(node.left), _eval(node.right))
+        elif isinstance(node, ast.UnaryOp): 
+            return unary_ops[type(node.op)](_eval(node.operand))
+        else: 
+            raise TypeError(node)
+    return _eval(ast.parse(expr, mode='eval').body)
+
+
+# =============== ASSISTBOT+ CORE ===============
 class AssistBotPlus:
     DB_FILE = "assistbot_plus.db"
     PLUGINS_DIR = "plugins"
@@ -143,9 +196,15 @@ class AssistBotPlus:
 
         self._setup_readline()
         self.executor = ThreadPoolExecutor(max_workers=2)
+        
+        # Reminder Background Monitor System
+        self.run_reminders = True
+        self.reminder_thread = threading.Thread(target=self._reminder_daemon, daemon=True)
+        self.reminder_thread.start()
+        
         self._print_banner()
 
-    # DB helpers
+    # =============== DATABASE OPERATIONS ===============
     def _setup_db(self):
         self.cursor.execute(
             "CREATE TABLE IF NOT EXISTS commands (key TEXT PRIMARY KEY, template TEXT, meta TEXT)"
@@ -155,6 +214,16 @@ class AssistBotPlus:
         )
         self.cursor.execute(
             "CREATE TABLE IF NOT EXISTS history (ts TEXT, entry TEXT)"
+        )
+        # Added tracking schemas for notes, graphs, and reminders
+        self.cursor.execute(
+            "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT, ts TEXT)"
+        )
+        self.cursor.execute(
+            "CREATE TABLE IF NOT EXISTS graphs (name TEXT PRIMARY KEY, data TEXT)"
+        )
+        self.cursor.execute(
+            "CREATE TABLE IF NOT EXISTS reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, msg TEXT, trigger_time REAL)"
         )
         self.db.commit()
 
@@ -167,7 +236,7 @@ class AssistBotPlus:
         self.knowledge = {r[0]: r[1] for r in self.cursor.fetchall()}
 
     def _save_mapping(self, key, template):
-        meta = json.dumps({"created": datetime.utcnow().isoformat()})
+        meta = json.dumps({"created": datetime.now(timezone.utc).isoformat()})
         self.cursor.execute("REPLACE INTO commands (key, template, meta) VALUES (?, ?, ?)", (key, template, meta))
         self.db.commit()
         self.mappings[key] = template
@@ -193,7 +262,7 @@ class AssistBotPlus:
         self.cursor.execute("INSERT INTO history VALUES (?, ?)", (ts, entry))
         self.db.commit()
 
-    # Plugins
+    # =============== PLUGIN SYSTEM ===============
     def _load_plugins(self):
         os.makedirs(self.PLUGINS_DIR, exist_ok=True)
         for path in glob.glob(os.path.join(self.PLUGINS_DIR, "*.py")):
@@ -203,11 +272,11 @@ class AssistBotPlus:
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 self.plugins[name] = mod
-                p(f"[PLUGIN] Loaded: {name}", style="cyan")
+                p(f"[PLUGIN] Loaded: {name}", style="sys")
             except Exception:
-                p(f"[PLUGIN] Failed to load {name}: {traceback.format_exc()}", style="red")
+                p(f"[PLUGIN] Failed to load {name}: {traceback.format_exc()}", style="err")
 
-    # Readline / Completion
+    # =============== READLINE & COMPLETION ===============
     def _setup_readline(self):
         histfile = os.path.expanduser("~/.assistbot_plus_history")
         try:
@@ -232,7 +301,8 @@ class AssistBotPlus:
             builtins = [
                 "help", "sys", "search", "maps", "brain", "memo",
                 "exit", "quit", "clear", "cd", "exec", "shell",
-                "unmap", "forget", ".map", ".teach", "map"
+                "unmap", "forget", ".map", ".teach", "map",
+                "calc", "note", "graph", "remind"
             ]
             keys = list(self.mappings.keys()) + list(self.knowledge.keys()) + builtins
             try:
@@ -253,28 +323,25 @@ class AssistBotPlus:
         except IndexError:
             return None
 
-    # Helpers
+    # =============== PROMPT DESIGN & TIME SYSTEM ===============
+    def get_sys_time(self):
+        """Updated Time System: Dystopian Hex-Splice Cycle Format."""
+        now = datetime.now()
+        return f"CYC-{now.strftime('%y.%m')} | T-{now.strftime('%H:%M:%S')}"
+
     def prompt_short(self):
         user = self.user
-        time = datetime.now().strftime("%H:%M")
-        path = self.cwd.replace(os.path.expanduser("~"), "~")
-        if USE_RICH:
-            header = f"[bold magenta]ASSIST[/bold magenta] "
-            user_part = f"[bold cyan]{user}[/bold cyan]"
-            at = " @ "
-            time_part = f"[bold green]{time}[/bold green]"
-            sep = f" [{path}]"
-            arrow = "[bold green]λ[/bold green]"
-            return f"{header}{user_part}{at}{time_part}{sep}\n{arrow} "
-        else:
-            header = f"{_np(ANSI['header'] + ANSI['bold'])}ASSIST{_np(ANSI['reset'])} "
-            user_part = f"{_np(ANSI['cyan'] + ANSI['bold'])}{user}{_np(ANSI['reset'])}"
-            at = " @ "
-            time_part = f"{_np(ANSI['green'] + ANSI['bold'])}{time}{_np(ANSI['reset'])}"
-            sep = f" {_np(ANSI['gold'])}{path}{_np(ANSI['reset'])}"
-            arrow = f"{_np(ANSI['green'] + ANSI['bold'])}λ{_np(ANSI['reset'])}"
-            return f"{header}{user_part}{at}{time_part}{sep}\n{arrow} "
+        time_str = self.get_sys_time()
+        
+        # Line 1: ┌──[username]──[time]
+        line1 = f"┌──{_np(ANSI['sys'])}[{user}]{_np(ANSI['reset'])}──{_np(ANSI['warn'])}[{time_str}]{_np(ANSI['reset'])}"
+        
+        # Line 2: └──> ▒ (cursor line)
+        line2 = f"└──{_np(ANSI['head'])}>{_np(ANSI['reset'])} {_np(ANSI['succ'])}▒{_np(ANSI['reset'])} "
+        
+        return f"{line1}\n{line2}"
 
+    # =============== SECURITY & MATCHING ===============
     @staticmethod
     def _is_blocked(cmd_text):
         if not cmd_text:
@@ -290,7 +357,7 @@ class AssistBotPlus:
         matches = difflib.get_close_matches(word, pool, n=1, cutoff=0.6)
         return matches[0] if matches else None
 
-    # Expand & Execute
+    # =============== TEMPLATE EXPANSION ===============
     def _expand_template(self, template, args):
         try:
             tokens = shlex.split(template)
@@ -316,252 +383,298 @@ class AssistBotPlus:
     def execute_mapped(self, template, args, dry=False):
         blocked, patt = self._is_blocked(template)
         if blocked:
-            p(f"[SECURITY] Refused to run command containing blocked pattern: {patt}", style="red")
+            p(f"[SECURITY] Refused to run command containing blocked pattern: {patt}", style="err")
             return None
 
         tokens = self._expand_template(template, args)
         if not tokens:
-            p("[EXEC] Nothing to run after expansion.", style="warning")
+            p("[EXEC] Nothing to run after expansion.", style="warn")
             return None
 
         if dry:
-            p("[DRY] expanded -> " + " ".join(shlex.quote(t) for t in tokens), style="warning")
+            p("[DRY] expanded -> " + " ".join(shlex.quote(t) for t in tokens), style="warn")
             return None
 
         try:
-            p(f"[EXEC] Running: {tokens[0]} {' '.join(shlex.quote(t) for t in tokens[1:])}", style="green")
+            p(f"[EXEC] Running: {tokens[0]} {' '.join(shlex.quote(t) for t in tokens[1:])}", style="succ")
             cp = subprocess.run(tokens, check=False)
             return cp
         except FileNotFoundError:
-            p("[EXEC] Command not found. Try shell form or map a full path.", style="red")
+            p("[EXEC] Command not found. Try shell form or map a full path.", style="err")
         except Exception as e:
-            p(f"[EXEC] Execution failed: {e}", style="red")
+            p(f"[EXEC] Execution failed: {e}", style="err")
             traceback.print_exc()
 
     def exec_shell(self, command_str):
         blocked, patt = self._is_blocked(command_str)
         if blocked:
-            p(f"[SECURITY] Refused to run shell command containing blocked pattern: {patt}", style="red")
+            p(f"[SECURITY] Refused to run shell command containing blocked pattern: {patt}", style="err")
             return None
-        p(f"[SHELL] Running via shell: {command_str}", style="warning")
+        p(f"[SHELL] Running via shell: {command_str}", style="warn")
         try:
             cp = subprocess.run(command_str, shell=True)
             return cp
         except Exception as e:
-            p(f"[SHELL] Failed: {e}", style="red")
+            p(f"[SHELL] Failed: {e}", style="err")
             traceback.print_exc()
 
-    # URL opener helper (tries many fallbacks without Termux:API requirement)
+    # =============== URL OPENER (PLATFORM-FRIENDLY) ===============
     def _open_url(self, url: str) -> bool:
-        """
-        Try multiple ways to open a URL. Returns True if one method appears to have been invoked.
-        Order:
-          1) Android 'am start' (available on most Android devices including Termux)
-          2) termux-open-url (if present)
-          3) xdg-open (Linux desktop)
-          4) open (macOS)
-          5) webbrowser.open()
-        If none works, return False (caller should print the URL).
-        """
-        # 1) Try Android am start (Intent)
         if shutil.which("am"):
             try:
-                # Use the Android intent to view the URL
                 rc = subprocess.run(["am", "start", "-a", "android.intent.action.VIEW", "-d", url], check=False)
-                # rc.returncode == 0 is a good sign
-                if rc.returncode == 0:
-                    return True
-            except Exception:
-                pass
+                if rc.returncode == 0: return True
+            except Exception: pass
 
-        # 2) termux-open-url (optional, won't be required)
         if shutil.which("termux-open-url"):
             try:
                 rc = subprocess.run(["termux-open-url", url], check=False)
-                if rc.returncode == 0:
-                    return True
-            except Exception:
-                pass
+                if rc.returncode == 0: return True
+            except Exception: pass
 
-        # 3) xdg-open (desktop linux)
         if shutil.which("xdg-open"):
             try:
                 rc = subprocess.run(["xdg-open", url], check=False)
-                if rc.returncode == 0:
-                    return True
-            except Exception:
-                pass
+                if rc.returncode == 0: return True
+            except Exception: pass
 
-        # 4) macOS open
         if shutil.which("open"):
             try:
                 rc = subprocess.run(["open", url], check=False)
-                if rc.returncode == 0:
-                    return True
-            except Exception:
-                pass
+                if rc.returncode == 0: return True
+            except Exception: pass
 
-        # 5) Python's webbrowser as last resort (may return False on Termux)
         try:
             opened = webbrowser.open(url, new=2)
-            if opened:
-                return True
-        except Exception:
-            pass
-
-        # nothing worked
+            if opened: return True
+        except Exception: pass
         return False
 
-    # Builtins
+    # =============== EXTENDED DYSTOPIAN MODULES ===============
+    def cmd_calc(self, args):
+        """Safe calculation parser built right in."""
+        if not args:
+            p("[ERR] REQ EXPRESSION NODE. Usage: calc 2+5*20", style="err")
+            return
+        expr = "".join(args)
+        try:
+            res = safe_eval(expr)
+            p(f"[SYS] LOGIC COMPUTATION RESULT: {res}", style="sys")
+        except Exception:
+            p("[ERR] CORRUPT DATA NODE OR INVALID SYNTAX IDENTIFIED.", style="err")
+
+    def cmd_note(self, args):
+        """Archived personal information text chunks."""
+        if not args:
+            p("Usage: note add <title> <content> | note list | note read <id> | note drop <id>", style="warn")
+            return
+        action = args[0].lower()
+        if action == "add" and len(args) >= 3:
+            title, content = args[1], " ".join(args[2:])
+            self.cursor.execute("INSERT INTO notes (title, content, ts) VALUES (?, ?, ?)", (title, content, self.get_sys_time()))
+            self.db.commit()
+            p(f"[SYS] TEXT DATA FRAGMENT '{title}' COMMITTED TO MEMORY.", style="succ")
+        elif action == "list":
+            self.cursor.execute("SELECT id, title, ts FROM notes")
+            rows = self.cursor.fetchall()
+            if not rows:
+                p("[SYS] THE PERSONAL ARCHIVE MEMORY BANCS ARE VACANT.", style="mut")
+                return
+            p(draw_box("DATA FRAGMENTS", rows, [4, 20, 26]), style="sys")
+        elif action == "read" and len(args) == 2:
+            self.cursor.execute("SELECT title, content, ts FROM notes WHERE id=?", (args[1],))
+            row = self.cursor.fetchone()
+            if row:
+                print(f"{ANSI['sys']}┌─ {row[0]} ".ljust(60, "─") + f"┐{ANSI['reset']}")
+                p(f"│ GENERATED: {row[2]}", style="mut")
+                print(f"{ANSI['sys']}├" + "─" * 58 + f"┤{ANSI['reset']}")
+                p(f"│ {row[1]}", style="reset")
+                print(f"{ANSI['sys']}└" + "─" * 58 + f"┘{ANSI['reset']}")
+            else:
+                p("[ERR] CORRUPT TARGET: DATA FRAGMENT IDENTIFIER NOT FOUND.", style="err")
+        elif action == "drop" and len(args) == 2:
+            self.cursor.execute("DELETE FROM notes WHERE id=?", (args[1],))
+            self.db.commit()
+            p("[SYS] TARGET DATA BLOCK HAS BEEN PURGED PERMANENTLY.", style="err")
+
+    def cmd_graph(self, args):
+        """Topological Data Matrix Graphics Engine."""
+        if not args:
+            p("Usage: graph create <name> <10,50,30,80> | graph view <name> | graph list", style="warn")
+            return
+        action = args[0].lower()
+        if action == "create" and len(args) >= 3:
+            name, data = args[1], args[2]
+            try:
+                [float(x) for x in data.split(",")]  # Topology check verification
+                self.cursor.execute("REPLACE INTO graphs (name, data) VALUES (?, ?)", (name, data))
+                self.db.commit()
+                p(f"[SYS] VECTOR GRAPH TOPOLOGY CONFIGURATION '{name}' RETAINED.", style="succ")
+            except ValueError:
+                p("[ERR] MATRIX DATA CAN ONLY CONTAIN COMMA-SEPARATED INTEGERS.", style="err")
+        elif action == "list":
+            self.cursor.execute("SELECT name FROM graphs")
+            rows = self.cursor.fetchall()
+            p("[SYS] IDENTIFIED RETAINED TOPOLOGIES:", style="sys")
+            for r in rows: 
+                p(f" -> {r[0]}", style="mut")
+        elif action == "view" and len(args) == 2:
+            self.cursor.execute("SELECT data FROM graphs WHERE name=?", (args[1],))
+            row = self.cursor.fetchone()
+            if not row:
+                p("[ERR] ARBITRARY DATA TOPOLOGY COORD SET UNKNOWN.", style="err")
+                return
+            
+            data = [float(x) for x in row[0].split(",")]
+            max_val = max(data) if data else 1
+            blocks = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+            
+            p(f"\nTOPOLOGY RENDER ENGINE MONITOR: {args[1]}", style="sys")
+            for i, val in enumerate(data):
+                idx = int((val / max_val) * 7) if max_val > 0 else 0
+                bar = blocks[idx] * int((val / max_val) * 25)
+                print(f"{ANSI['head']}{i:02d}{ANSI['reset']} | {ANSI['succ']}{bar.ljust(25)}{ANSI['reset']} Matrix Vector Node: {val}")
+            print()
+
+    def cmd_remind(self, args):
+        """Inject cortical custom notification timer blocks."""
+        if len(args) < 2:
+            p("Usage: remind <seconds> <message...>", style="warn")
+            return
+        try:
+            delay = float(args[0])
+            msg = " ".join(args[1:])
+            trigger = time.time() + delay
+            self.cursor.execute("INSERT INTO reminders (msg, trigger_time) VALUES (?, ?)", (msg, trigger))
+            self.db.commit()
+            p(f"[SYS] INJECTED REAL-TIME CORTICAL ALERT IMPLANT TARGETED IN {delay}s.", style="succ")
+        except ValueError:
+            p("[ERR] TEMPORAL TIME INTERVAL VALUE TYPE MUST BE NUMERIC.", style="err")
+
+    def _reminder_daemon(self):
+        """Asynchronous background loop handling alerts."""
+        while self.run_reminders:
+            try:
+                now = time.time()
+                # Query direct connection thread assets securely
+                self.cursor.execute("SELECT id, msg FROM reminders WHERE trigger_time <= ?", (now,))
+                due = self.cursor.fetchall()
+                for r in due:
+                    # Thread terminal flash trigger ring bell sound (\a)
+                    print("\a", end="")
+                    print(f"\n\n{ANSI['err']}>>> WARNING: CORTICAL NOTIFICATION DETECTED <<<{ANSI['reset']} {r[1]}")
+                    print(f"{ANSI['succ']}▒{ANSI['reset']} ", end="", flush=True)
+                    self.cursor.execute("DELETE FROM reminders WHERE id=?", (r[0],))
+                if due: 
+                    self.db.commit()
+            except Exception:
+                pass
+            time.sleep(1.5)
+
+    # =============== BUILTIN ROUTING AND RUN TIME ===============
     def cmd_help(self):
-        help_text = """AssistBot+ — Cool mode enabled.
+        help_text = f"""{ANSI['sys']}AssistBot+ — Cyberpunk Dystopian Edition{ANSI['reset']}
 
 Core commands:
-  help                 Show this help
-  sys                  Show disk and load info
-  search <query>       Open browser search (google or youtube). Accepts flags -y/--youtube or -g/--google.
-  .map key = template  Map a key to a command template (use $1, $2, $*, $@)
-  .teach key = resp1|resp2  Teach bot responses (separate with |)
-  maps                 List mapped commands
-  map <key> [args...]  Run mapped command
-  unmap <key>          Remove mapping
-  brain                List brain keys
-  <brain_key>          Print a stored response (randomly if multiple)
-  exec <cmd> [args..]  Execute raw command (split like shell)
-  shell <command str>  Run via shell (explicit, gated)
-  memo                 Open the assistant DB with sqlite3 if available
-  cd <path>            Change working directory
-  clear                Clear screen
-  exit / quit          Quit
-
-Examples:
-  search mrbeast youtube
-  search yt: \"mrbeast challenge\"
-  search -y mrbeast
-  search -g linux networking
-  .map greet = echo Hello $1
-  .teach joke = Why did the chicken cross? | To get to the other side
+  {ANSI['head']}help{ANSI['reset']}                 Show this help menu matrix layout
+  {ANSI['head']}sys{ANSI['reset']}                  Show disk structure allocations and core load metric meters
+  {ANSI['head']}calc <expr>{ANSI['reset']}          Evaluate mathematical logic matrices securely via AST
+  {ANSI['head']}note{ANSI['reset']}                 add / list / read / drop personal information fragments
+  {ANSI['head']}graph{ANSI['reset']}                create / view / list visual horizontal terminal graph datasets
+  {ANSI['head']}remind <s.> <msg>{ANSI['reset']}   Inject active threaded background custom notification parameters
+  {ANSI['head']}search <query>{ANSI['reset']}       Open browser query portals (use -y for YouTube, -g for Google)
+  {ANSI['head']}.map key = template{ANSI['reset']}  Map a shorthand system configuration macro
+  {ANSI['head']}.teach key = resp{ANSI['reset']}     Impart conscious prompt responses to the mainframe block
+  {ANSI['head']}maps / brain{ANSI['reset']}         Display active configuration structural layouts
+  {ANSI['head']}clear / cd / exit{ANSI['reset']}     Terminal environmental state configurations
 """
-        p(help_text, style="muted")
+        print(help_text)
 
     def cmd_sys(self):
+        """Display system info with neon disk meter."""
         try:
             total, used, free = shutil.disk_usage(self.cwd)
             load = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
-            p(f"[DISK] {used // (2**30)}GB used / {total // (2**30)}GB total", style="cyan")
-            p(f"[LOAD] {load[0]:.2f} {load[1]:.2f} {load[2]:.2f}", style="cyan")
+            
+            used_gb = used // (2**30)
+            total_gb = total // (2**30)
+            
+            meter = disk_meter(used, total, width=20)
+            
+            p("[DISK]", style="sys", end="")
+            p(f" {used_gb}GB used / {total_gb}GB total", end="")
+            p(f" {meter}", style="succ")
+            
+            p(f"[LOAD] {load[0]:.2f} {load[1]:.2f} {load[2]:.2f}", style="sys")
         except Exception as e:
-            p(f"[SYS] Info failed: {e}", style="red")
+            p(f"[SYS] Info failed: {e}", style="err")
 
     def cmd_search(self, raw_query: str):
-        """
-        Robust search implementation:
-          - supports flags -y/--youtube and -g/--google
-          - supports prefixes 'yt:' or 'youtube:' and 'yt:term' inline
-          - detects phrases like 'on youtube', trailing 'youtube' or 'yt'
-          - tries to open the URL using _open_url() (which uses am/xdg-open/termux-open-url/webbrowser)
-          - prints the final URL as fallback
-        """
         if not raw_query or not raw_query.strip():
-            p("Usage: search <query>  (use -y for YouTube or -g for Google)", style="warning")
+            p("Usage: search <query>  (use -y for YouTube or -g for Google)", style="warn")
             return
 
-        try:
-            tokens = shlex.split(raw_query)
-        except Exception:
-            tokens = raw_query.split()
+        try: tokens = shlex.split(raw_query)
+        except Exception: tokens = raw_query.split()
 
         tokens_l = [t.lower() for t in tokens]
+        force_yt, force_google, is_youtube = False, False, False
 
-        force_yt = False
-        force_google = False
-        is_youtube = False
-
-        # First pass: parse flags and prefixes; build cleaned tokens
         cleaned = []
         for tok, tl in zip(tokens, tokens_l):
-            if tl in ('-y', '--youtube'):
-                force_yt = True
-                continue
-            if tl in ('-g', '--google'):
-                force_google = True
-                continue
-            if tl.endswith(':') and tl[:-1] in ('yt', 'youtube'):
-                is_youtube = True
-                continue
+            if tl in ('-y', '--youtube'): is_youtube = True; continue
+            if tl in ('-g', '--google'): force_google = True; continue
+            if tl.endswith(':') and tl[:-1] in ('yt', 'youtube'): is_youtube = True; continue
             if ':' in tok and tok.split(':', 1)[0].lower() in ('yt', 'youtube'):
                 is_youtube = True
                 parts = tok.split(':', 1)
-                if parts[1]:
-                    cleaned.append(parts[1])
+                if parts[1]: cleaned.append(parts[1])
                 continue
             cleaned.append(tok)
 
-        # Respect explicit flags
-        if force_yt:
-            is_youtube = True
-        if force_google:
-            is_youtube = False
+        if force_google: is_youtube = False
 
-        # Second pass: safely remove tokens like 'on youtube', 'of youtube', standalone 'youtube'/'yt'
         new_cleaned = []
         i = 0
         while i < len(cleaned):
             tok = cleaned[i]
             tl = tok.lower()
-            # on youtube / of youtube
             if tl in ('on', 'of') and i + 1 < len(cleaned) and cleaned[i+1].lower() == 'youtube':
-                is_youtube = True
-                i += 2
-                continue
+                is_youtube = True; i += 2; continue
             if tl == 'youtube' or tl == 'yt':
-                is_youtube = True
-                i += 1
-                continue
+                is_youtube = True; i += 1; continue
             new_cleaned.append(tok)
             i += 1
 
         query = ' '.join(new_cleaned).strip()
 
-        # If user asked only youtube (no extra terms)
         if is_youtube and not query:
             url = 'https://www.youtube.com'
-            p('[WEB] Opening YouTube home', style='green')
-            p(url, style='muted')
-            opened = self._open_url(url)
-            if not opened:
-                p('[WEB] Could not open automatically. URL printed above.', style='warning')
+            p('[WEB] Opening YouTube home', style='sys')
+            self._open_url(url)
             return
 
-        # Build final URL
-        if is_youtube:
-            enc = urllib.parse.quote_plus(query if query else raw_query)
-            url = f'https://www.youtube.com/results?search_query={enc}'
-            p(f"[WEB] YouTube search: {query if query else raw_query}", style='green')
-        else:
-            enc = urllib.parse.quote_plus(query if query else raw_query)
-            url = f'https://www.google.com/search?q={enc}'
-            p(f"[WEB] Google search: {query if query else raw_query}", style='green')
-
-        # Attempt to open
-        p(url, style='muted')
-        opened = self._open_url(url)
-        if not opened:
-            p('[WEB] No opener succeeded — copy/paste the URL above into a browser.', style='warning')
+        enc = urllib.parse.quote_plus(query if query else raw_query)
+        url = f'https://www.youtube.com/results?search_query={enc}' if is_youtube else f'https://www.google.com/search?q={enc}'
+        p(f"[WEB] Routing Portal Request: {query if query else raw_query}", style='sys')
+        p(url, style='mut')
+        self._open_url(url)
 
     def cmd_maps(self):
         if not self.mappings:
-            p("No mappings yet. Use: .map key = command", style="warning")
+            p("No mappings yet. Use: .map key = command", style="warn")
             return
         rows = [(k, self.mappings[k]) for k in sorted(self.mappings.keys())]
-        pretty_table(["key", "template"], rows, title="Mappings")
+        col_widths = [max(len(r[0]) for r in rows) + 2, max(len(r[1]) for r in rows) + 2]
+        p(draw_box("MAPPINGS", rows, col_widths), style="sys")
 
     def cmd_brain(self):
         if not self.knowledge:
-            p("Brain empty. Use: .teach key = resp1|resp2", style="warning")
+            p("Brain empty. Use: .teach key = resp1|resp2", style="warn")
             return
         rows = [(k, self.knowledge[k]) for k in sorted(self.knowledge.keys())]
-        pretty_table(["key", "responses"], rows, title="Brain")
+        col_widths = [max(len(r[0]) for r in rows) + 2, max(len(r[1]) for r in rows) + 2]
+        p(draw_box("BRAIN", rows, col_widths), style="sys")
 
     def _print_banner(self):
         banner_lines = [
@@ -571,190 +684,103 @@ Examples:
             r" | |_| |  ___) | |_) | |___|  _ <| |\  |",
             r"  \___/  |____/|____/|_____|_| \_\_| \_|",
         ]
-        if USE_RICH:
-            console.print(Panel("\n".join(banner_lines), title="[bold magenta]AssistBot+[/bold magenta]", subtitle="[bold cyan]Cool Mode[/bold cyan]"))
-            p("Type 'help' to get started.", style="muted")
-        else:
-            p("\n".join(banner_lines), style="header")
-            p(">>> AssistBot+ — Cool Mode (type 'help')", style="cyan")
+        for line in banner_lines:
+            p(line, style="head")
+        p("", end="")
+        p(">>> ASSISTBOT+ — CYBERPUNK DYSTOPIAN EDITION // SYSTEM RUNNING", style="sys")
+        p(">>> Mainframe terminal ready. Input directive sequence.", style="mut")
+        p("", end="")
 
-    # Main loop
     def run(self):
-        p("Starting AssistBot+ — ready.", style="magenta")
+        p("Starting AssistBot+ — neural link active.", style="sys")
         while True:
             try:
                 prompt_str = self.prompt_short()
-                if USE_RICH:
-                    try:
-                        raw = console.input(prompt_str)
-                    except Exception:
-                        raw = input(prompt_str.replace("[", "").replace("]", ""))
-                else:
-                    raw = input(prompt_str)
-                if raw is None:
-                    break
+                raw = input(prompt_str)
+                if raw is None: break
                 line = raw.strip()
-                if not line:
-                    continue
+                if not line: continue
 
-                try:
-                    self.add_history(line)
-                except Exception:
-                    pass
+                try: self.add_history(line)
+                except Exception: pass
 
-                # dotted meta commands
                 if line.startswith("."):
                     if " = " in line:
                         header, body = line[1:].split(" = ", 1)
                         header = header.strip()
                         if header.startswith("map"):
                             key = header[3:].strip()
-                            if not key:
-                                p("Usage: .map key = template", style="warning")
-                                continue
+                            if not key: continue
                             blocked, patt = self._is_blocked(body)
-                            if blocked:
-                                p(f"[SECURITY] Refused to store mapping containing blocked pattern: {patt}", style="red")
-                                continue
+                            if blocked: continue
                             self._save_mapping(key, body)
-                            p(f"[MAP] Saved mapping '{key}' -> {body}", style="green")
+                            p(f"[MAP] Saved shorthand code template assignment.", style="succ")
                         elif header.startswith("teach"):
                             key = header[5:].strip()
-                            if not key:
-                                p("Usage: .teach key = resp1|resp2", style="warning")
-                                continue
+                            if not key: continue
                             parts = [s.strip() for s in body.split("|") if s.strip()]
                             self._save_brain(key, parts)
-                            p(f"[BRAIN] Learned key '{key}' with {len(parts)} response(s).", style="green")
-                        else:
-                            p("Unknown .command. Use .map or .teach", style="warning")
-                    else:
-                        p("Malformed dot-command. Use '.map key = template' or '.teach key = resp1|resp2'", style="warning")
+                            p(f"[BRAIN] Consciousness data structural map configured.", style="succ")
                     continue
 
-                try:
-                    parts = shlex.split(line)
-                except Exception:
-                    parts = line.split()
-                if not parts:
-                    continue
+                try: parts = shlex.split(line)
+                except Exception: parts = line.split()
+                if not parts: continue
+                
                 cmd = parts[0].lower()
                 args = parts[1:]
 
-                # builtins routing
+                # Integrated core routing modules
                 if cmd in ("exit", "quit"):
-                    p("Goodbye — stay curious.", style="magenta")
+                    p("Severing direct neural connection uplink. Systems offline.", style="head")
+                    self.run_reminders = False
                     break
-                if cmd == "help":
-                    self.cmd_help(); continue
-                if cmd == "sys":
-                    self.cmd_sys(); continue
-                if cmd == "search":
-                    # pass raw substring so quotes/colons are preserved
-                    self.cmd_search(" ".join(args)); continue
-                if cmd == "maps":
-                    self.cmd_maps(); continue
-                if cmd == "brain":
-                    self.cmd_brain(); continue
-                if cmd == "memo":
-                    dbpath = os.path.abspath(self.DB_FILE)
-                    if shutil.which("sqlite3"):
-                        p(f"[MEMO] Opening sqlite3 CLI for {dbpath}", style="green")
-                        subprocess.run(["sqlite3", dbpath])
-                    else:
-                        p(f"[MEMO] DB file at: {dbpath}", style="green")
-                    continue
-                if cmd == "clear":
-                    os.system("cls" if os.name == "nt" else "clear")
-                    continue
-                if cmd == "cd":
+                elif cmd == "help": self.cmd_help()
+                elif cmd == "sys": self.cmd_sys()
+                elif cmd == "calc": self.cmd_calc(args)
+                elif cmd == "note": self.cmd_note(args)
+                elif cmd == "graph": self.cmd_graph(args)
+                elif cmd == "remind": self.cmd_remind(args)
+                elif cmd == "search": self.cmd_search(" ".join(args))
+                elif cmd == "maps": self.cmd_maps()
+                elif cmd == "brain": self.cmd_brain()
+                elif cmd == "clear": os.system("cls" if os.name == "nt" else "clear")
+                elif cmd == "cd":
                     target = args[0] if args else os.path.expanduser("~")
                     try:
                         os.chdir(os.path.expanduser(target))
                         self.cwd = os.getcwd()
-                        p(f"[DIR] {self.cwd}", style="green")
-                    except Exception as e:
-                        p(f"[DIR] Failed to change dir: {e}", style="red")
-                    continue
-                if cmd in ("unmap", "forget"):
-                    if not args:
-                        p("Usage: unmap <key>", style="warning"); continue
-                    key = args[0]
-                    if key in self.mappings:
-                        self._delete_mapping(key)
-                        p(f"[MAP] Deleted mapping: {key}", style="green")
-                    else:
-                        p("[MAP] Key not found.", style="warning")
-                    continue
-                if cmd == "exec":
-                    if not args:
-                        p("Usage: exec <cmd> [args...]", style="warning"); continue
-                    try:
-                        subprocess.run(args, check=False)
-                    except Exception as e:
-                        p(f"[EXEC] Failed: {e}", style="red")
-                    continue
-                if cmd == "shell":
-                    if not args:
-                        p("Usage: shell <command string>", style="warning"); continue
-                    cmdstr = " ".join(args)
-                    self.exec_shell(cmdstr)
-                    continue
-
-                # map shorthand
-                if cmd == "map" and args:
-                    key = args[0]
-                    mapping = self.mappings.get(key)
-                    if mapping:
-                        self.execute_mapped(mapping, args[1:])
-                    else:
-                        p(f"[MAP] No mapping named '{key}'", style="warning")
-                    continue
-
-                # direct mapping invocation
-                if cmd in self.mappings:
+                        p(f"[DIR] {self.cwd}", style="succ")
+                    except Exception: p("[DIR] Critical path unresolvable.", style="err")
+                elif cmd in ("unmap", "forget"):
+                    if args and args[0] in self.mappings: self._delete_mapping(args[0])
+                elif cmd == "exec" and args:
+                    try: subprocess.run(args, check=False)
+                    except Exception: pass
+                elif cmd == "shell" and args:
+                    self.exec_shell(" ".join(args))
+                elif cmd == "map" and args:
+                    mapping = self.mappings.get(args[0])
+                    if mapping: self.execute_mapped(mapping, args[1:])
+                elif cmd in self.mappings:
                     self.execute_mapped(self.mappings[cmd], args)
-                    continue
+                elif cmd in self.knowledge:
+                    resps = self.knowledge[cmd]
+                    p(random.choice(resps.split("|")) if "|" in resps else resps, style="mut")
+                elif shutil.which(cmd):
+                    try: subprocess.run([cmd] + args)
+                    except Exception: pass
+                else:
+                    sugg = self.fuzzy_match(cmd)
+                    if sugg: p(f"[SUGGEST] Direct command invalid. Did you mean '{sugg}'?", style="warn")
+                    else: p("[??] Command string unknown. Mainframe security access denied.", style="err")
 
-                # brain responses
-                if cmd in self.knowledge:
-                    responses = self.knowledge[cmd]
-                    if isinstance(responses, str) and "|" in responses:
-                        cand = [r for r in responses.split("|") if r.strip()]
-                        reply = random.choice(cand) if cand else responses
-                    elif isinstance(responses, str):
-                        reply = responses
-                    else:
-                        reply = str(responses)
-                    p(reply, style="muted")
-                    continue
+            except KeyboardInterrupt: p("\n[WARN] Uplink alert loop signal interrupted.", style="warn")
+            except EOFError: break
+            except Exception as e: p(f"[ERROR] Mainframe panic condition: {e}", style="err")
 
-                # run system commands directly if available
-                if shutil.which(cmd):
-                    try:
-                        subprocess.run([cmd] + args)
-                    except Exception as e:
-                        p(f"[SYS] Failed to run {cmd}: {e}", style="red")
-                    continue
-
-                # fuzzy suggestion
-                suggestion = self.fuzzy_match(cmd)
-                if suggestion:
-                    p(f"[SUGGEST] Unknown command. Did you mean '{suggestion}'? Try it.", style="warning")
-                    continue
-
-                p("[??] Command unknown. Use .map or .teach to extend me, or 'help' for builtins.", style="red")
-
-            except KeyboardInterrupt:
-                p("\nInterrupted (Ctrl-C). Type exit to quit.", style="warning")
-            except EOFError:
-                p("\nEOF. Exiting.", style="magenta")
-                break
-            except Exception as e:
-                p(f"[ERROR] {e}", style="red")
-                traceback.print_exc()
-
-# ---------------- Run ----------------
 if __name__ == "__main__":
+    animate_boot()
     bot = AssistBotPlus()
     bot.run()
+
